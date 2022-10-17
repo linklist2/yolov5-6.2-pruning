@@ -28,10 +28,6 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from models.yolo import Detect, Model
-from val import run as valrun
-from yolo_pruned import ModelPruned
-
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
@@ -40,6 +36,12 @@ if str(ROOT) not in sys.path:
 ROOT = ROOT.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
+
+from models.yolo import Detect, Model
+from val import run as valrun
+from yolo_pruned import ModelPruned
+
+
 
 from models.common import DetectMultiBackend, Bottleneck, Concat
 from pruned_common import *
@@ -60,8 +62,9 @@ def gather_bn_weights(module_list):
     return bn_weights
 
 
-def obtain_bn_mask(bn_module, thre):
-    thre = thre.cuda()
+def obtain_bn_mask(bn_module, thre, device):
+    # thre = thre.cuda()
+    thre = thre.to(device)
     mask = bn_module.weight.data.abs().ge(thre).float()
 
     return mask
@@ -197,9 +200,10 @@ def run_prune(data,
     for bn_name, bn_layer in model.named_modules():
         if isinstance(bn_layer, nn.BatchNorm2d):
             if bn_name in ignore_bn_list:
-                mask = torch.ones(bn_layer.weight.data.size()).cuda()
+                # mask = torch.ones(bn_layer.weight.data.size()).cuda()
+                mask = torch.ones(bn_layer.weight.data.size()).to(device)
             else:
-                mask = obtain_bn_mask(bn_layer, thre)
+                mask = obtain_bn_mask(bn_layer, thre, device)
 
             maskbndict[bn_name] = mask
             # 当前层剩余的通道数
@@ -220,7 +224,8 @@ def run_prune(data,
     time.sleep(1)
 
     # 根据mask信息重新构建yolo模型
-    pruned_model = ModelPruned(maskbndict=maskbndict, cfg=pruned_yaml, ch=3).cuda()
+    # pruned_model = ModelPruned(maskbndict=maskbndict, cfg=pruned_yaml, ch=3).cuda()
+    pruned_model = ModelPruned(maskbndict=maskbndict, cfg=pruned_yaml, ch=3).to(device)
     for m in pruned_model.modules():
         if type(m) in [nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU, Detect, Model]:
             m.inplace = True  # pytorch 1.7.0 compatibility
@@ -303,7 +308,8 @@ def run_prune(data,
 
     # 开始验证剪枝后的模型的指标
     model = pruned_model
-    model.cuda().eval()
+    model.to(device).eval()
+    # model.cuda().eval()
 
     # 创建dataloader
     pad = 0.0 if task in ('speed', 'benchmark') else 0.5
